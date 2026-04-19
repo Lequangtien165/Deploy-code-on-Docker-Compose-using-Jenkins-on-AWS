@@ -1,4 +1,4 @@
-# 🚀 Deploy Java Web App on Docker Container via Jenkins on AWS
+# Deploy Java Web App on Docker Container via Jenkins on AWS
 
 > **Tự động hóa toàn bộ quy trình Build → Package → Deploy** một ứng dụng Java Web lên Docker Container chạy trên AWS EC2, sử dụng Jenkins CI/CD Pipeline.
 
@@ -8,9 +8,9 @@
 
 | Công nghệ | Phiên bản | Ghi chú |
 |---|---|---|
-| **AWS EC2** | Amazon Linux 2023 | Thay thế Amazon Linux 2 |
+| **AWS EC2** | Amazon Linux 2023 | Thay thế Amazon Linux 2 (dùng `dnf` thay `yum`) |
 | **Java** | Amazon Corretto 21 (LTS) | Thay thế Java 11 |
-| **Maven** | 3.9.9 | Build tool cho Java |
+| **Maven** | 3.9.15 | Bản mới nhất tại thời điểm 04/2026 |
 | **Jenkins** | LTS (2.x) | CI/CD Automation |
 | **Git** | 2.x | Source Control |
 | **Docker Engine** | 26.x | Container Runtime |
@@ -25,8 +25,8 @@
 3. Tích hợp Maven với Jenkins
 4. Setup Docker Host trên EC2
 5. Tích hợp Docker với Jenkins
-6. Tự động hóa Build & Deploy qua Jenkins Pipeline
-7. Kiểm tra kết quả
+6. Tạo Jenkins Job – Build & Copy Artifact
+7. Tự động hóa Build và Deploy toàn diện
 
 ---
 
@@ -43,21 +43,18 @@
 
 ### 1.1 – Khởi tạo EC2 Instance
 
-1. Đăng nhập **AWS Management Console** → mở **EC2 Dashboard** → click **Launch Instance**.
-2. Cấu hình như sau:
+1. Đăng nhập **AWS Management Console** → **EC2 Dashboard** → **Launch Instance**.
+2. Cấu hình:
 
-| Tham số | Giá trị khuyến nghị |
+| Tham số | Giá trị |
 |---|---|
 | **Name** | `jenkins-server` |
 | **AMI** | Amazon Linux 2023 AMI |
 | **Instance Type** | `t3.micro` *(Free Tier eligible)* |
-| **Key Pair** | Tạo mới hoặc dùng cặp key có sẵn (`.pem`) |
+| **Key Pair** | Tạo mới hoặc dùng key có sẵn (`.pem`) |
 | **Security Group** | Mở port **22** (SSH) và **8080** (Jenkins UI) |
 
-> ⚠️ **Lưu ý bảo mật:** Chỉ cho phép IP của bạn truy cập port 22. Không mở `0.0.0.0/0` cho SSH trong môi trường production.
-
-3. Click **Launch Instance** và chờ trạng thái chuyển sang `Running`.
-4. Kết nối SSH:
+3. Click **Launch Instance** → chờ `Running` → kết nối SSH:
 
 ```bash
 chmod 400 your-key.pem
@@ -69,15 +66,16 @@ ssh -i "your-key.pem" ec2-user@<EC2-PUBLIC-IP>
 ### 1.2 – Cài đặt Java 21 (Amazon Corretto)
 
 ```bash
-# Cập nhật hệ thống
 sudo dnf update -y
-
-# Cài đặt Amazon Corretto 21
 sudo dnf install java-21-amazon-corretto -y
 
-# Kiểm tra phiên bản
+# Kiểm tra
 java -version
 # Output: openjdk version "21.x.x" ...
+
+# Lấy JAVA_HOME chính xác (lưu lại để dùng ở Step 3)
+java -XshowSettings:all -version 2>&1 | grep "java.home"
+# Output ví dụ: java.home = /usr/lib/jvm/java-21-amazon-corretto.x86_64
 ```
 
 ---
@@ -85,21 +83,15 @@ java -version
 ### 1.3 – Cài đặt Jenkins
 
 ```bash
-# Thêm Jenkins repository
 sudo wget -O /etc/yum.repos.d/jenkins.repo \
     https://pkg.jenkins.io/redhat-stable/jenkins.repo
 
-# Import GPG key
 sudo rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
 
-# Cài đặt Jenkins
 sudo dnf install jenkins -y
 
-# Kích hoạt và khởi động Jenkins
 sudo systemctl enable jenkins
 sudo systemctl start jenkins
-
-# Kiểm tra trạng thái
 sudo systemctl status jenkins
 ```
 
@@ -107,47 +99,65 @@ sudo systemctl status jenkins
 
 ### 1.4 – Truy cập Jenkins Web UI
 
-Mở trình duyệt và truy cập: `http://<EC2-PUBLIC-IP>:8080`
-
-Lấy mật khẩu Admin lần đầu:
+Mở trình duyệt: `http://<EC2-PUBLIC-IP>:8080`
 
 ```bash
+# Lấy mật khẩu Admin lần đầu
 sudo cat /var/lib/jenkins/secrets/initialAdminPassword
 ```
 
-Dán mật khẩu vào giao diện **Unlock Jenkins** → chọn **Install suggested plugins** → tạo tài khoản Admin.
+Dán mật khẩu → **Install suggested plugins** → tạo tài khoản Admin.
+
+---
+
+### 1.5 – Cấu hình Executor (Quan trọng!)
+
+Nếu build bị kẹt **"Waiting for next available executor"**:
+
+1. **Manage Jenkins** → **Nodes** → **Built-In Node** → **Configure**
+2. Đặt **Number of executors** = `2` → **Save**
+3. Vào lại **Nodes** → **Built-In Node** → click **"Bring this node back online"**
+
+**Nếu node offline do /tmp đầy** (SSH vào Jenkins Server EC2):
+
+```bash
+sudo rm -rf /tmp/*
+sudo dnf clean all
+df -h /tmp
+```
+
+Sau đó: **Manage Jenkins** → **Nodes** → **Built-In Node** → **Configure** → tìm **Free Temp Space Threshold** → đổi xuống `900MB` → **Save** → click **"Bring this node back online"**.
 
 ---
 
 ## Step 2: Tích hợp GitHub với Jenkins
 
-### 2.1 – Cài đặt Git trên EC2
+### 2.1 – Cài đặt Git trên Jenkins EC2
 
 ```bash
 sudo dnf install git -y
-
-# Xác nhận phiên bản
 git --version
 ```
 
-### 2.2 – Cài đặt Plugin GitHub Integration trên Jenkins
+### 2.2 – Cài Plugin GitHub Integration
 
-1. Vào **Manage Jenkins** → **Plugins** → tab **Available plugins**.
-2. Tìm kiếm `GitHub Integration` → chọn → click **Install**.
+**Manage Jenkins** → **Plugins** → **Available plugins** → tìm `GitHub Integration` → **Install**.
 
 ### 2.3 – Cấu hình Git trong Jenkins
 
-1. Vào **Manage Jenkins** → **Tools**.
-2. Cuộn xuống phần **Git installations** → điền:
-   - **Name:** `git`
-   - **Path to Git executable:** `git` *(để Jenkins tự tìm)*
-3. Click **Save**.
+**Manage Jenkins** → **Tools** → **Git installations**:
+- **Name:** `git`
+- **Path to Git executable:** `git`
+
+→ **Save**
 
 ---
 
 ## Step 3: Tích hợp Maven với Jenkins
 
-### 3.1 – Cài đặt Maven 3.9.x trên EC2
+### 3.1 – Cài đặt Maven 3.9.15
+
+> ⚠️ Phải dùng domain `dlcdn.apache.org`, KHÔNG dùng `downloads.apache.org` (chỉ lưu bản mới nhất, các bản cũ trả về 404). Luôn kiểm tra bản mới nhất tại https://maven.apache.org/download.cgi
 
 ```bash
 cd /opt
@@ -163,13 +173,11 @@ sudo rm apache-maven-3.9.15-bin.tar.gz
 
 ### 3.2 – Thiết lập Environment Variables
 
-Chỉnh sửa file `/etc/profile.d/maven.sh` (cách hiện đại hơn dùng `.bash_profile`):
-
 ```bash
 sudo tee /etc/profile.d/maven.sh > /dev/null <<'EOF'
 export M2_HOME=/opt/maven
 export M2=$M2_HOME/bin
-export JAVA_HOME=/usr/lib/jvm/java-21-amazon-corretto
+export JAVA_HOME=/usr/lib/jvm/java-21-amazon-corretto.x86_64
 export PATH=$M2:$JAVA_HOME/bin:$PATH
 EOF
 
@@ -177,76 +185,80 @@ source /etc/profile.d/maven.sh
 
 # Kiểm tra
 mvn -version
+# Output: Apache Maven 3.9.15 ...
 ```
 
-### 3.3 – Cài Plugin và Cấu hình Maven trong Jenkins
+> 💡 Thay `java-21-amazon-corretto.x86_64` bằng path chính xác lấy từ Step 1.2.
 
-1. Vào **Manage Jenkins** → **Plugins** → tìm `Maven Integration` → **Install**.
-2. Vào **Manage Jenkins** → **Tools**:
-   - **# Cách nhanh nhất – để Java tự tìm path chính xác java - "XshowSettings:all -version 2>&1 | grep "java.home""**
-   - **JDK installations:** đặt `JAVA_HOME` = `/usr/lib/jvm/java-21-amazon-corretto`
-   - **Maven installations:** đặt `Maven Name` = `maven-3.9.15`
-3. Click **Save**.
+### 3.3 – Cấu hình Maven trong Jenkins
+
+1. **Manage Jenkins** → **Plugins** → tìm `Maven Integration` → **Install**
+2. **Manage Jenkins** → **Tools**:
+   - **JDK installations** → **Add JDK**:
+     - **Name:** `java-21`
+     - Bỏ tick **Install automatically**
+     - **JAVA_HOME:** điền path lấy từ Step 1.2 *(ví dụ: `/usr/lib/jvm/java-21-amazon-corretto.x86_64`)*
+     > ℹ️ Nếu Jenkins hiện **cảnh báo vàng** *"is not a directory on the Jenkins controller (but perhaps it exists on some agents)"* → **bình thường, bấm Save tiếp, không phải lỗi**.
+   - **Maven installations** → **Add Maven**:
+     - **Name:** `maven-3.9.15`
+     - Tick **Install automatically** → chọn version `3.9.15`
+3. **Save**
 
 ---
 
 ## Step 4: Setup Docker Host trên EC2
 
-### 4.1 – Tạo EC2 Instance mới (Docker Host)
+### 4.1 – Tạo EC2 Instance mới
 
-Lặp lại quy trình tạo EC2 như ở Step 1 với tên `docker-host`. Mở thêm port range **8081–9000** trong Security Group.
+Tạo instance tên `docker-host` (cấu hình tương tự Step 1.1). Trong Security Group, mở thêm port range **8081–9000**.
 
 ### 4.2 – Cài đặt Docker Engine
 
 ```bash
-# Cập nhật hệ thống
 sudo dnf update -y
-
-# Cài đặt Docker
 sudo dnf install docker -y
-
-# Kích hoạt và khởi động Docker daemon
 sudo systemctl enable docker
 sudo systemctl start docker
-
-# Kiểm tra phiên bản
 docker --version
-# Output: Docker version 26.x.x ...
 ```
 
 ### 4.3 – Tạo user `dockeradmin`
 
 ```bash
-# Tạo user
 sudo useradd dockeradmin
+sudo passwd dockeradmin       # nhập và ghi nhớ mật khẩu
 
-# Đặt mật khẩu
-sudo passwd dockeradmin
-
-# Thêm vào nhóm docker
 sudo usermod -aG docker dockeradmin
 ```
 
-### 4.4 – Bật xác thực bằng mật khẩu SSH *(chỉ dùng cho lab/demo)*
+### 4.4 – Thêm ec2-user vào nhóm docker
 
-> 💡 **Production:** Nên dùng SSH key thay vì mật khẩu.
+```bash
+sudo usermod -aG docker ec2-user
+newgrp docker
+```
+
+### 4.5 – Bật xác thực bằng mật khẩu SSH
 
 ```bash
 sudo sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
-
-# Khởi động lại SSH daemon
 sudo systemctl reload sshd
 ```
 
-### 4.5 – Tạo Dockerfile tùy chỉnh cho Tomcat
+### 4.6 – Tạo thư mục và Dockerfile
 
 ```bash
-# Tạo thư mục làm việc
 sudo mkdir -p /opt/docker
 sudo chown -R dockeradmin:dockeradmin /opt/docker
 ```
 
-Tạo file `/opt/docker/Dockerfile`:
+Tạo Dockerfile (phải dùng `sudo` vì `ec2-user` không sở hữu thư mục):
+
+```bash
+sudo nano /opt/docker/Dockerfile
+```
+
+Nội dung Dockerfile:
 
 ```dockerfile
 FROM tomcat:10.1
@@ -260,22 +272,27 @@ COPY ./*.war /usr/local/tomcat/webapps
 EXPOSE 8080
 ```
 
-> ⚠️ **Lưu ý:** Tomcat 10.1 yêu cầu Jakarta EE namespace. Nếu ứng dụng dùng `javax.*`, hãy dùng `tomcat:9.0` thay thế.
+Lưu file: **Ctrl+O** → **Enter** → **Ctrl+X**
 
-### 4.6 – Build và chạy thử container
+> ⚠️ Nếu ứng dụng dùng `javax.*` (Java EE cũ), đổi sang `tomcat:9.0`.
+
+### 4.7 – Build và chạy thử container
 
 ```bash
-# Build image
 docker build -t tomcatserver:latest /opt/docker/
-
-# Chạy container thử nghiệm
 docker run -d --name tomcat-test -p 8085:8080 tomcatserver:latest
-
-# Kiểm tra
 docker ps
 ```
 
+Lấy Public IP hiện tại của Docker Host:
+
+```bash
+curl ifconfig.me
+```
+
 Truy cập: `http://<DOCKER-HOST-IP>:8085`
+
+> 💡 EC2 thay đổi Public IP mỗi lần stop/start. Luôn chạy `curl ifconfig.me` để lấy IP mới nhất.
 
 ---
 
@@ -283,13 +300,11 @@ Truy cập: `http://<DOCKER-HOST-IP>:8085`
 
 ### 5.1 – Cài Plugin "Publish Over SSH"
 
-1. Vào **Manage Jenkins** → **Plugins** → **Available plugins**.
-2. Tìm `Publish Over SSH` → **Install**.
+**Manage Jenkins** → **Plugins** → **Available plugins** → tìm `Publish Over SSH` → **Install**.
 
-### 5.2 – Cấu hình Docker Host trong Jenkins
+### 5.2 – Cấu hình SSH Server
 
-1. Vào **Manage Jenkins** → **System**.
-2. Cuộn xuống phần **Publish over SSH** → click **Add** dưới **SSH Servers**:
+**Manage Jenkins** → **System** → cuộn đến **Publish over SSH** → **Add SSH Server**:
 
 | Trường | Giá trị |
 |---|---|
@@ -298,32 +313,46 @@ Truy cập: `http://<DOCKER-HOST-IP>:8085`
 | **Username** | `dockeradmin` |
 | **Remote Directory** | `/opt/docker` |
 
-3. Nhập mật khẩu trong **Advanced** → **Password**.
-4. Click **Test Configuration** để xác nhận kết nối thành công.
-5. **Apply** và **Save**.
+Click **Advanced** → tick **Use password authentication** → nhập mật khẩu `dockeradmin`.
+
+Click **Test Configuration** → phải thấy `Success` → **Apply** → **Save**.
 
 ---
 
-## Step 6: Tạo Jenkins Job – Build & Copy Artifact sang Docker Host
+## Step 6: Tạo Jenkins Job – Build & Copy Artifact
 
-1. Tạo **New Item** → đặt tên `BuildAndDeploy` → chọn **Maven project** → **OK**.
+1. **New Item** → tên `BuildAndDeploy` → chọn **Maven project** → **OK**
 2. Cấu hình:
-   - **Source Code Management:** Git → nhập URL repository GitHub của bạn.
-   - **Build Triggers:** chọn `Poll SCM` với schedule `* * * * *` (poll mỗi phút).
-   - **Build:** chọn **Root POM** = `pom.xml`, **Goals** = `clean install`.
-3. Phần **Post-build Actions** → **Send build artifacts over SSH**:
-   - **SSH Server Name:** `docker-host`
-   - **Source files:** `webapp/target/*.war`
-   - **Remote directory:** `//opt//docker`
-4. **Apply** và **Save**.
+   - **Source Code Management:** Git → nhập URL repo GitHub
+   - **Build Triggers:** tick `Poll SCM` → schedule `* * * * *`
+   - **Build Section:**
+     - **Root POM:** `hello-world/pom.xml`
+     - **Goals:** `clean install`
+3. **Post-build Actions** → **Send build artifacts over SSH**:
+
+| Trường | Giá trị |
+|---|---|
+| **SSH Server Name** | `docker-host` |
+| **Source files** | `hello-world/webapp/target/webapp.war` |
+| **Remove prefix** | `hello-world/webapp/target` |
+| **Remote directory** | `//opt//docker` |
+
+4. **Apply** → **Save** → **Build Now**
+
+Kiểm tra trên Docker Host sau khi build xong:
+
+```bash
+ls /opt/docker/
+# Phải thấy: Dockerfile  webapp.war
+```
 
 ---
 
 ## Step 7: Tự động hóa Build và Deploy toàn diện
 
-### 7.1 – Cập nhật Exec Command trong Jenkins Job
+### 7.1 – Cập nhật Exec Command
 
-Trong **Post-build Actions** → **Send build artifacts over SSH** → **Exec command**:
+Vào **BuildAndDeploy** → **Configure** → **Send build artifacts over SSH** → **Exec command**:
 
 ```bash
 cd /opt/docker
@@ -339,57 +368,85 @@ docker build -t regapp:latest .
 docker run -d --name regapp -p 8087:8080 regapp:latest
 ```
 
-> 💡 Đoạn script trên xử lý trường hợp container đã tồn tại (tránh lỗi name conflict).
+**Apply** → **Save**
 
 ### 7.2 – Kích hoạt Pipeline
 
-Commit bất kỳ thay đổi nào vào GitHub repository. Jenkins sẽ tự động:
+Commit bất kỳ thay đổi nào lên GitHub. Jenkins tự động:
 
 1. ✅ Phát hiện thay đổi qua Poll SCM
 2. ✅ Clone code từ GitHub
-3. ✅ Build `.war` file bằng Maven
-4. ✅ Copy artifact sang Docker Host qua SSH
+3. ✅ Build `.war` bằng Maven
+4. ✅ Copy `webapp.war` sang Docker Host qua SSH
 5. ✅ Build Docker image mới
-6. ✅ Chạy container mới
+6. ✅ Chạy container mới trên port 8087
+
+**Nếu gặp lỗi `Exec exit status not zero. Status [126]`** — `dockeradmin` thiếu quyền Docker:
+
+```bash
+# SSH vào Docker Host
+sudo usermod -aG docker dockeradmin
+sudo systemctl restart docker
+```
+
+Sau đó **Build Now** lại trên Jenkins.
 
 ### 7.3 – Kiểm tra kết quả
 
 ```bash
-# Trên Docker Host – kiểm tra container đang chạy
+# Trên Docker Host
 docker ps
+# Phải thấy container "regapp" đang chạy port 8087
 
-# Xem logs của container
 docker logs regapp
 ```
 
-Truy cập ứng dụng: `http://<DOCKER-HOST-IP>:8087/webapp/`
+Truy cập ứng dụng:
+
+```
+http://<DOCKER-HOST-IP>:8087/webapp/
+```
 
 ---
 
-## 🧹 Dọn dẹp tài nguyên (Quan trọng!)
+## 🐛 Bảng xử lý lỗi thường gặp
 
-Sau khi thực hành xong, nhớ **terminate** các EC2 Instance để tránh phát sinh chi phí:
+| Lỗi | Nguyên nhân | Cách fix |
+|---|---|---|
+| `ERROR 404` khi tải Maven | `downloads.apache.org` không lưu bản cũ | Dùng `dlcdn.apache.org` + kiểm tra version mới nhất |
+| `Source option 7 is no longer supported` | `pom.xml` set source/target = `1.7` | Đổi thành `<source>1.8</source><target>1.8</target>` |
+| `Waiting for next available executor` | Executor = 0 hoặc node offline | Đặt executor = 2, bấm "Bring node back online" |
+| Node offline do `/tmp` đầy | `/tmp` < 1GB threshold mặc định | Dọn `/tmp`, hạ threshold xuống `900MB` |
+| `doesn't look like a JDK directory` (lỗi đỏ) | JAVA_HOME sai | Chạy `java -XshowSettings:all -version 2>&1 \| grep java.home` |
+| `is not a directory on Jenkins controller` (cảnh báo vàng) | Jenkins controller không tìm thấy path | **Bình thường** – bấm Save tiếp |
+| `Status [126]` SSH exec failed | `dockeradmin` không có quyền docker | `sudo usermod -aG docker dockeradmin && sudo systemctl restart docker` |
+| Web `can't be reached` | IP đổi sau khi restart EC2 | `curl ifconfig.me` lấy IP mới |
+| `/opt/docker/` không có `webapp.war` | Source files path sai trong Jenkins | Source=`hello-world/webapp/target/webapp.war`, Remove prefix=`hello-world/webapp/target` |
+| `permission denied` khi nano Dockerfile | `ec2-user` không sở hữu `/opt/docker` | Dùng `sudo nano /opt/docker/Dockerfile` |
+| `HTTP Status 404` trên webapp | WAR chưa vào container | Kiểm tra `docker exec regapp ls /usr/local/tomcat/webapps/` |
+
+---
+
+## 🧹 Dọn dẹp tài nguyên
 
 ```bash
-# Dừng tất cả container trên Docker Host
+# Trên Docker Host
 docker stop $(docker ps -q)
-
-# Xoá image không dùng
 docker image prune -a
 ```
 
-Sau đó vào **EC2 Console** → chọn các instance → **Instance State** → **Terminate**.
+Vào **EC2 Console** → chọn tất cả instance → **Instance State** → **Terminate**.
 
 ---
 
 ## 🔐 Best Practices (Production)
 
-- **SSH Keys** thay vì mật khẩu cho `dockeradmin`.
-- Dùng **Jenkins Credentials Store** để lưu secrets (không hardcode trong script).
-- Dùng **Jenkinsfile** (Pipeline as Code) thay vì Freestyle Job để version control pipeline.
-- Thiết lập **Docker image tagging** theo build number: `regapp:${BUILD_NUMBER}`.
-- Cân nhắc dùng **Amazon ECR** thay vì build image trực tiếp trên host.
-- Giới hạn Security Group: chỉ mở port cần thiết, không dùng `0.0.0.0/0` cho SSH.
+- Dùng **SSH Key** thay mật khẩu cho `dockeradmin`
+- Lưu secrets trong **Jenkins Credentials Store**
+- Dùng **Jenkinsfile** (Pipeline as Code) để version control pipeline
+- Tag Docker image theo build number: `regapp:${BUILD_NUMBER}`
+- Cân nhắc dùng **Amazon ECR** thay vì build image trực tiếp trên host
+- Dùng **Elastic IP** để tránh Public IP thay đổi mỗi lần restart EC2
 
 ---
 
@@ -402,41 +459,21 @@ Developer
     ▼
 GitHub Repository
     │
-    │ Poll SCM (Jenkins)
+    │ Poll SCM (mỗi phút)
     ▼
-Jenkins Server (EC2 - t3.micro)
+Jenkins Server (EC2 - Amazon Linux 2023)
   ├── Java 21 (Amazon Corretto)
-  ├── Maven 3.9.9
-  └── Build .war artifact
+  ├── Maven 3.9.15
+  └── Build → webapp.war
     │
-    │ Publish Over SSH
+    │ Publish Over SSH (dockeradmin@docker-host)
     ▼
-Docker Host (EC2 - t3.micro)
+Docker Host (EC2 - Amazon Linux 2023)
   ├── Docker Engine 26.x
-  ├── Dockerfile (Tomcat 10.1)
-  └── Running Container → port 8087
+  ├── /opt/docker/Dockerfile + webapp.war
+  ├── docker build -t regapp:latest
+  └── docker run -p 8087:8080 regapp:latest
     │
     ▼
 http://<docker-host-ip>:8087/webapp/
 ```
-
----
-
-## 🛠️ Tác giả & Cộng đồng
-
-Dự án gốc được tạo bởi **[Harshhaa](https://github.com/NotHarshhaa)** 💡.
-README này đã được cập nhật lên tech stack hiện đại (2025–2026).
-
-📧 **Kết nối:**
-
-- **GitHub**: [@NotHarshhaa](https://github.com/NotHarshhaa)
-- **Blog**: [ProDevOpsGuy](https://blog.prodevopsguytech.com)
-- **Telegram**: [Join Here](https://t.me/prodevopsguy)
-- **LinkedIn**: [Harshhaa Vardhan Reddy](https://www.linkedin.com/in/harshhaa-vardhan-reddy/)
-
----
-
-## ⭐ Ủng hộ dự án
-
-Nếu bài hướng dẫn này hữu ích, hãy **star** ⭐ repository và chia sẻ với cộng đồng! 🚀
-
