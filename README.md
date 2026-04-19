@@ -6,8 +6,8 @@
 
 ## 🧰 Tech Stack
 
-| Công nghệ | Phiên bản | Ghi chú |
-|---|---|---|
+| Công nghệ | Phiên bản |
+|---|---|
 | **AWS EC2** | Amazon Linux 2023 |
 | **Java** | Amazon Corretto 21 (LTS) |
 | **Maven** | 3.9.15 |
