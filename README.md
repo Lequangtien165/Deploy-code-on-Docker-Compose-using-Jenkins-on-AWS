@@ -8,13 +8,13 @@
 
 | Công nghệ | Phiên bản | Ghi chú |
 |---|---|---|
-| **AWS EC2** | Amazon Linux 2023 | Thay thế Amazon Linux 2 (dùng `dnf` thay `yum`) |
-| **Java** | Amazon Corretto 21 (LTS) | Thay thế Java 11 |
-| **Maven** | 3.9.15 | Bản mới nhất tại thời điểm 04/2026 |
-| **Jenkins** | LTS (2.x) | CI/CD Automation |
-| **Git** | 2.x | Source Control |
-| **Docker Engine** | 26.x | Container Runtime |
-| **Tomcat** | 10.1 (trong Docker) | Java Web Server |
+| **AWS EC2** | Amazon Linux 2023 |
+| **Java** | Amazon Corretto 21 (LTS) |
+| **Maven** | 3.9.15 |
+| **Jenkins** | LTS (2.x) |
+| **Git** | 2.x |
+| **Docker Engine** | 26.x |
+| **Tomcat** | 10.1 (trong Docker) |
 
 ---
 
